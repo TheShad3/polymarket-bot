@@ -9,16 +9,12 @@ TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 # Порог суммы сделки
-MIN_SIZE = 500
+MIN_SIZE = 200  # уменьшен, чтобы ловить больше сделок
 
 # Интервал для топа активности (минут)
 TOP_INTERVAL_MIN = 10
-# Период активности (часов)
+# Период активности кошелька (часов)
 HOURS_ACTIVITY = 1
-
-# Порог % изменения цены
-PRICE_CHANGE_THRESHOLD = 5
-PRICE_CHANGE_INTERVAL = 10
 
 # Последние N сделок для расчета вероятности и тренда
 N_PROB = 10
@@ -34,17 +30,19 @@ WATCH_WALLETS = [
     "0xbad457dc633bbb7b6cbe09dd5867a5e8e597acd7"
 ]
 
-# Ключевые слова геополитики
+# Расширенный список ключевых слов
 KEYWORDS = [
     "Trump", "Biden", "Russia", "Ukraine", "China", "war", "election",
     "international", "us-foreign-policy", "ukraine-war", "middle-east",
     "red-sea", "houthi", "taiwan", "eu-politics", "uk-politics",
     "us-congress", "white-house", "administration", "federal-reserve",
     "interest-rates", "supreme-court", "trade-wars", "crypto-policy",
-    "sanctions", "energy-policy"
+    "sanctions", "energy-policy",
+    # дополнительные общие слова
+    "conflict", "crisis", "negotiation", "tension", "sanction", "military"
 ]
 
-# URL Polymarket
+# URL Polymarket (CLOB API)
 URL = "https://clob.polymarket.com/trades?limit=50"
 
 # История
@@ -64,6 +62,16 @@ def send_message(text):
         print("Ошибка отправки:", e)
 
 
+def contains_keyword(text):
+    if not text:
+        return False
+    text = text.lower()
+    for kw in KEYWORDS:
+        if kw.lower() in text:
+            return True
+    return False
+
+
 def fetch_trades(retries=3, delay=5):
     for attempt in range(retries):
         try:
@@ -81,14 +89,44 @@ def fetch_trades(retries=3, delay=5):
     return []
 
 
-def contains_keyword(text):
-    if not text:
-        return False
-    text = text.lower()
-    for kw in KEYWORDS:
-        if kw.lower() in text:
-            return True
-    return False
+def check_price_anomaly(market, price):
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=10)
+    market_prices[market].append((price, now))
+    market_prices[market] = [(p, t) for p, t in market_prices[market] if t >= cutoff]
+    if not market_prices[market]:
+        return None
+    old_price = market_prices[market][0][0]
+    if old_price == 0:
+        return None
+    change_pct = (price - old_price) / old_price * 100
+    if abs(change_pct) >= 2:  # сниженный порог аномалии
+        return round(change_pct, 2)
+    return None
+
+
+def calc_market_prob(market):
+    last_prices = [p for p, t in market_prices[market][-N_PROB:]]
+    if not last_prices:
+        return None
+    avg = sum(last_prices) / len(last_prices)
+    return round(avg * 100, 2)
+
+
+def generate_trend(market):
+    last_prices = [p for p, t in market_prices[market][-N_PROB:]]
+    if len(last_prices) < 2:
+        return ""
+    trend = ""
+    for i in range(1, len(last_prices)):
+        diff = last_prices[i] - last_prices[i - 1]
+        if diff > 0.01:
+            trend += "↑"
+        elif diff < -0.01:
+            trend += "↓"
+        else:
+            trend += "→"
+    return trend
 
 
 def send_top_wallets():
@@ -108,58 +146,19 @@ def send_top_wallets():
     send_message(text)
 
 
-def check_price_anomaly(market, price):
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(minutes=PRICE_CHANGE_INTERVAL)
-    market_prices[market].append((price, now))
-    market_prices[market] = [(p, t) for p, t in market_prices[market] if t >= cutoff]
-    if not market_prices[market]:
-        return None
-    old_price = market_prices[market][0][0]
-    if old_price == 0:
-        return None
-    change_pct = (price - old_price) / old_price * 100
-    if abs(change_pct) >= PRICE_CHANGE_THRESHOLD:
-        return round(change_pct, 2)
-    return None
-
-
-def calc_market_prob(market):
-    last_prices = [p for p, t in market_prices[market][-N_PROB:]]
-    if not last_prices:
-        return None
-    avg = sum(last_prices) / len(last_prices)
-    return round(avg * 100, 2)
-
-
-def generate_trend(market):
-    last_prices = [p for p, t in market_prices[market][-N_PROB:]]
-    if len(last_prices) < 2:
-        return ""
-    trend = ""
-    for i in range(1, len(last_prices)):
-        diff = last_prices[i] - last_prices[i-1]
-        if diff > 0.01:
-            trend += "↑"
-        elif diff < -0.01:
-            trend += "↓"
-        else:
-            trend += "→"
-    return trend
-
-
 def main():
-    print("Бот запущен...")
+    print("Бот запущен с частыми сигналами...")
     last_top = datetime.now(timezone.utc) - timedelta(minutes=TOP_INTERVAL_MIN)
 
     while True:
         trades = fetch_trades()
-        print(f"Получено сделок: {len(trades)}")
         now = datetime.now(timezone.utc)
+        print(f"Получено сделок: {len(trades)}")
 
         for t in trades:
             if not isinstance(t, dict):
                 continue
+
             trade_id = t.get("id")
             trader = t.get("trader")
             market = t.get("market", "unknown")
@@ -175,8 +174,9 @@ def main():
             if not contains_keyword(market):
                 continue
 
+            # разрешаем сигнал каждые 5 минут для одного рынка
             last_signal = market_last_signal.get(market)
-            if last_signal and now - last_signal < timedelta(minutes=15):
+            if last_signal and now - last_signal < timedelta(minutes=5):
                 continue
             market_last_signal[market] = now
             seen_trades.add(trade_id)
@@ -188,10 +188,7 @@ def main():
                 anomaly = "⚡ КИТОВСКАЯ АКТИВНОСТЬ!"
 
             price_change = check_price_anomaly(market, price)
-            price_alert = ""
-            if price_change:
-                price_alert = f"⚠️ Цена изменилась на {price_change}% за последние {PRICE_CHANGE_INTERVAL} мин!"
-
+            price_alert = f"⚠️ Цена изменилась на {price_change}%!" if price_change else ""
             prob = calc_market_prob(market)
             prob_text = f"🔮 Системная вероятность исхода: {prob}%" if prob else ""
             trend_text = generate_trend(market)
