@@ -1,13 +1,27 @@
 import requests
 import time
 import os
+from collections import defaultdict
+from datetime import datetime, timedelta
 
 # Telegram
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# Минимальная сумма сделки
+# Порог суммы сделки
 MIN_SIZE = 500
+
+# Интервал для топа активности (минут)
+TOP_INTERVAL_MIN = 10
+# Период активности (часов)
+HOURS_ACTIVITY = 1
+
+# Порог % изменения цены
+PRICE_CHANGE_THRESHOLD = 5
+PRICE_CHANGE_INTERVAL = 10
+
+# Последние N сделок для расчета вероятности и тренда
+N_PROB = 10
 
 # Кошельки для отслеживания
 WATCH_WALLETS = [
@@ -33,13 +47,14 @@ KEYWORDS = [
 # URL Polymarket
 URL = "https://clob.polymarket.com/trades?limit=50"
 
-# История для аномалий
+# История
 seen_trades = set()
-market_activity = {}  # {market: [sizes]}
+market_last_signal = {}
+wallet_activity = defaultdict(list)
+market_prices = defaultdict(list)
 
 
 def send_message(text):
-    """Отправка сообщения в Telegram"""
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         requests.post(url, json={"chat_id": CHAT_ID, "text": text})
@@ -48,7 +63,6 @@ def send_message(text):
 
 
 def fetch_trades():
-    """Получение последних сделок"""
     try:
         res = requests.get(URL, timeout=10)
         data = res.json()
@@ -64,7 +78,6 @@ def fetch_trades():
 
 
 def contains_keyword(text):
-    """Проверка, содержит ли текст ключевые слова"""
     if not text:
         return False
     text = text.lower()
@@ -74,17 +87,76 @@ def contains_keyword(text):
     return False
 
 
+def send_top_wallets():
+    now = datetime.utcnow()
+    cutoff = now - timedelta(hours=HOURS_ACTIVITY)
+    sums = {}
+    for wallet, trades in wallet_activity.items():
+        total = sum(s for s, t in trades if t >= cutoff)
+        if total > 0:
+            sums[wallet] = total
+    if not sums:
+        return
+    top_wallets = sorted(sums.items(), key=lambda x: x[1], reverse=True)[:5]
+    text = "📊 Топ активных кошельков за последний час:\n"
+    for wallet, total in top_wallets:
+        text += f"👛 {wallet} — ${total}\n"
+    send_message(text)
+
+
+def check_price_anomaly(market, price):
+    now = datetime.utcnow()
+    cutoff = now - timedelta(minutes=PRICE_CHANGE_INTERVAL)
+    market_prices[market].append((price, now))
+    market_prices[market] = [(p, t) for p, t in market_prices[market] if t >= cutoff]
+    if not market_prices[market]:
+        return None
+    old_price = market_prices[market][0][0]
+    if old_price == 0:
+        return None
+    change_pct = (price - old_price) / old_price * 100
+    if abs(change_pct) >= PRICE_CHANGE_THRESHOLD:
+        return round(change_pct, 2)
+    return None
+
+
+def calc_market_prob(market):
+    last_prices = [p for p, t in market_prices[market][-N_PROB:]]
+    if not last_prices:
+        return None
+    avg = sum(last_prices) / len(last_prices)
+    return round(avg * 100, 2)
+
+
+def generate_trend(market):
+    """Графический тренд последних N_PROB цен"""
+    last_prices = [p for p, t in market_prices[market][-N_PROB:]]
+    if len(last_prices) < 2:
+        return ""
+    trend = ""
+    for i in range(1, len(last_prices)):
+        diff = last_prices[i] - last_prices[i-1]
+        if diff > 0.01:
+            trend += "↑"
+        elif diff < -0.01:
+            trend += "↓"
+        else:
+            trend += "→"
+    return trend
+
+
 def main():
     print("Бот запущен...")
+    last_top = datetime.utcnow() - timedelta(minutes=TOP_INTERVAL_MIN)
 
     while True:
         trades = fetch_trades()
         print(f"Получено сделок: {len(trades)}")
+        now = datetime.utcnow()
 
         for t in trades:
             if not isinstance(t, dict):
                 continue
-
             trade_id = t.get("id")
             trader = t.get("trader")
             market = t.get("market", "unknown")
@@ -93,26 +165,36 @@ def main():
 
             if not trade_id or trade_id in seen_trades:
                 continue
-
-            # Фильтр кошельков и суммы
             if trader not in WATCH_WALLETS:
                 continue
             if size < MIN_SIZE:
                 continue
-
-            # Фильтр ключевых слов по событию
             if not contains_keyword(market):
                 continue
 
-            # Проверка аномалий: сохраняем последние размеры по рынку
-            market_activity.setdefault(market, []).append(size)
-            recent_sizes = market_activity[market][-3:]  # последние 3 сделки
+            last_signal = market_last_signal.get(market)
+            if last_signal and now - last_signal < timedelta(minutes=15):
+                continue
+            market_last_signal[market] = now
+            seen_trades.add(trade_id)
 
+            wallet_activity[trader].append((size, now))
+            last_three = [s for s, t in wallet_activity[trader][-3:]]
             anomaly = ""
-            if len(recent_sizes) >= 3 and all(s >= MIN_SIZE for s in recent_sizes):
+            if len(last_three) >= 3 and all(s >= MIN_SIZE for s in last_three):
                 anomaly = "⚡ КИТОВСКАЯ АКТИВНОСТЬ!"
 
-            # Формирование сообщения
+            price_change = check_price_anomaly(market, price)
+            price_alert = ""
+            if price_change:
+                price_alert = f"⚠️ Цена изменилась на {price_change}% за последние {PRICE_CHANGE_INTERVAL} мин!"
+
+            prob = calc_market_prob(market)
+            prob_text = f"🔮 Системная вероятность исхода: {prob}%" if prob else ""
+            trend_text = generate_trend(market)
+            if trend_text:
+                trend_text = f"📈 Тренд: {trend_text}"
+
             text = f"""
 🔥 СДЕЛКА
 
@@ -121,11 +203,19 @@ def main():
 💰 Сумма: ${size}
 📈 Цена: {price}
 {anomaly}
+{price_alert}
+{prob_text}
+{trend_text}
+
+💡 Активность кошелька за последние 3 сделки: {sum(last_three)}
+
 🔗 https://polymarket.com/market/{market.replace(' ', '-')}
 """
-
             send_message(text)
-            seen_trades.add(trade_id)
+
+        if now - last_top >= timedelta(minutes=TOP_INTERVAL_MIN):
+            send_top_wallets()
+            last_top = now
 
         time.sleep(10)
 
