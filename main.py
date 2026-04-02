@@ -7,7 +7,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 seen_trades = set()
 
-GRAPH_URL = "https://api.thegraph.com/subgraphs/name/protofire/polymarket"
+URL = "https://clob.polymarket.com/trades?limit=20"
 
 def send_message(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -17,24 +17,10 @@ def send_message(text):
     })
 
 def fetch_trades():
-    query = """
-    {
-      trades(first: 10, orderBy: timestamp, orderDirection: desc) {
-        id
-        trader
-        market {
-          question
-        }
-        price
-        size
-      }
-    }
-    """
-
     try:
-        res = requests.post(GRAPH_URL, json={"query": query}, timeout=10)
+        res = requests.get(URL, timeout=10)
         data = res.json()
-        return data.get("data", {}).get("trades", [])
+        return data
     except Exception as e:
         print("Ошибка:", e)
         return []
@@ -46,17 +32,19 @@ def main():
         trades = fetch_trades()
 
         for t in trades:
-            if t["id"] not in seen_trades:
+            trade_id = t.get("id")
+
+            if trade_id not in seen_trades:
                 text = f"""
 🔥 СДЕЛКА
 
 👛 {t.get('trader')}
-📊 {t.get('market', {}).get('question')}
+📊 {t.get('market')}
 💰 {t.get('size')}
 📈 {t.get('price')}
 """
                 send_message(text)
-                seen_trades.add(t["id"])
+                seen_trades.add(trade_id)
 
         time.sleep(10)
 
