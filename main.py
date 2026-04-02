@@ -2,12 +2,13 @@ import requests
 import time
 from datetime import datetime, timedelta, timezone
 from telegram import Bot
+import os
 
 # -------------------------------
-# Настройки Telegram
+# Настройки Telegram из переменных окружения
 # -------------------------------
-TOKEN = "8416331409:AAHmKxMdTqJatN2-UpOBjTNHibpW4O-lUNc"
-CHAT_ID = 239655276
+TOKEN = os.getenv("TG_BOT_TOKEN")  # Пример: 8416331409:AAHmKxMdTqJatN2-UpOBjTNHibpW4O-lUNc
+CHAT_ID = int(os.getenv("TG_CHAT_ID"))  # Пример: 239655276
 bot = Bot(token=TOKEN)
 
 # -------------------------------
