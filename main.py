@@ -19,12 +19,12 @@ bot = Bot(token=TOKEN)
 # ----------------------------
 # Настройки фильтров
 # ----------------------------
-MIN_AMOUNT = 50  # минимальная сумма сделки
-MIN_WIN_RATE = 0.5  # минимальный win rate кошелька
-TOP_INTERVAL_MIN = 10  # интервал для анализа топовых кошельков
+MIN_AMOUNT = 50       # минимальная сумма сделки
+MIN_WIN_RATE = 0.5    # минимальный win rate кошелька
+TOP_INTERVAL_MIN = 10 # интервал для анализа топовых кошельков
 
 # ----------------------------
-# Ключевые слова для геополитики
+# Ключевые слова геополитики
 # ----------------------------
 KEYWORDS = [
     "Trump", "Biden", "Russia", "Ukraine", "China", "war", "election", "international",
@@ -76,37 +76,22 @@ WATCH_WALLETS = [
 ]
 
 # ----------------------------
-# Основная функция бота
+# Функция получения сделок через CLOB API
 # ----------------------------
 def fetch_trades():
-    url = "https://api.thegraph.com/subgraphs/name/protofire/polymarket"
-    query = """
-    {
-      trades(first: 20, orderBy: timestamp, orderDirection: desc) {
-        id
-        market {
-          id
-          title
-        }
-        amount
-        outcome
-        trader {
-          id
-          totalTrades
-          winRate
-        }
-        timestamp
-      }
-    }
-    """
+    url = "https://clob.polymarket.com/trades?limit=50"
     try:
-        response = requests.post(url, json={"query": query}, timeout=10)
-        data = response.json()
-        return data["data"]["trades"]
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("trades", [])
     except Exception as e:
         print(f"Ошибка загрузки: {e}")
         return []
 
+# ----------------------------
+# Основной цикл бота
+# ----------------------------
 def main():
     print("Бот запущен...")
     last_top = datetime.utcnow() - timedelta(minutes=TOP_INTERVAL_MIN)
@@ -114,28 +99,30 @@ def main():
     while True:
         trades = fetch_trades()
         print(f"Получено сделок: {len(trades)}")
-
         signals_sent = 0
 
         for t in trades:
-            # Проверяем тип данных
+            # Проверяем формат
             if isinstance(t, dict):
-                trade_id = t.get("id")
-                trader = t.get("trader", {})
-                wallet = trader.get("id")
-                win_rate = trader.get("winRate", 0)
-                total_trades = trader.get("totalTrades", 0)
-                market = t.get("market", {})
-                title = market.get("title", "")
+                wallet = t.get("traderId")
                 amount = float(t.get("amount", 0))
+                win_rate = float(t.get("traderWinRate", 0))
+                title = t.get("marketTitle", "")
 
+                # Фильтры
                 if (
                     wallet in WATCH_WALLETS
                     and amount >= MIN_AMOUNT
                     and win_rate >= MIN_WIN_RATE
                     and any(k.lower() in title.lower() for k in KEYWORDS)
                 ):
-                    msg = f"Сигнал от кошелька: {wallet}\nСделка: {title}\nСумма: {amount}\nWin rate: {win_rate}\nСсылка на лот: https://polymarket.com/market/{market.get('id')}"
+                    msg = (
+                        f"Сигнал от кошелька: {wallet}\n"
+                        f"Сделка: {title}\n"
+                        f"Сумма: {amount}\n"
+                        f"Win rate: {win_rate}\n"
+                        f"Ссылка на лот: https://polymarket.com/market/{t.get('marketId')}"
+                    )
                     bot.send_message(chat_id=CHAT_ID, text=msg)
                     signals_sent += 1
 
