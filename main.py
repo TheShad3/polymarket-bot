@@ -6,10 +6,10 @@ import os
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# Минимальная сумма сделки для уведомления
+# Минимальная сумма сделки
 MIN_SIZE = 500
 
-# Кошельки, за которыми нужно следить
+# Кошельки для отслеживания
 WATCH_WALLETS = [
     "0x7f3c8979d0afa00007bae4747d5347122af05613",
     "0xd5ccdf772f795547e299de57f47966e24de8dea4",
@@ -20,11 +20,22 @@ WATCH_WALLETS = [
     "0xbad457dc633bbb7b6cbe09dd5867a5e8e597acd7"
 ]
 
-# URL Polymarket
-URL = "https://clob.polymarket.com/trades?limit=20"
+# Ключевые слова геополитики
+KEYWORDS = [
+    "Trump", "Biden", "Russia", "Ukraine", "China", "war", "election",
+    "international", "us-foreign-policy", "ukraine-war", "middle-east",
+    "red-sea", "houthi", "taiwan", "eu-politics", "uk-politics",
+    "us-congress", "white-house", "administration", "federal-reserve",
+    "interest-rates", "supreme-court", "trade-wars", "crypto-policy",
+    "sanctions", "energy-policy"
+]
 
-# Сохраняем уже отправленные сделки
+# URL Polymarket
+URL = "https://clob.polymarket.com/trades?limit=50"
+
+# История для аномалий
 seen_trades = set()
+market_activity = {}  # {market: [sizes]}
 
 
 def send_message(text):
@@ -37,11 +48,10 @@ def send_message(text):
 
 
 def fetch_trades():
-    """Получение последних сделок с Polymarket"""
+    """Получение последних сделок"""
     try:
         res = requests.get(URL, timeout=10)
         data = res.json()
-
         if isinstance(data, dict):
             return data.get("data", [])
         elif isinstance(data, list):
@@ -53,12 +63,23 @@ def fetch_trades():
         return []
 
 
+def contains_keyword(text):
+    """Проверка, содержит ли текст ключевые слова"""
+    if not text:
+        return False
+    text = text.lower()
+    for kw in KEYWORDS:
+        if kw.lower() in text:
+            return True
+    return False
+
+
 def main():
     print("Бот запущен...")
 
     while True:
         trades = fetch_trades()
-        print(f"Получено сделок: {len(trades)}")  # Для логов Railway
+        print(f"Получено сделок: {len(trades)}")
 
         for t in trades:
             if not isinstance(t, dict):
@@ -73,20 +94,33 @@ def main():
             if not trade_id or trade_id in seen_trades:
                 continue
 
-            # Фильтр по кошелькам и сумме
+            # Фильтр кошельков и суммы
             if trader not in WATCH_WALLETS:
                 continue
             if size < MIN_SIZE:
                 continue
 
-            # Формируем сообщение
+            # Фильтр ключевых слов по событию
+            if not contains_keyword(market):
+                continue
+
+            # Проверка аномалий: сохраняем последние размеры по рынку
+            market_activity.setdefault(market, []).append(size)
+            recent_sizes = market_activity[market][-3:]  # последние 3 сделки
+
+            anomaly = ""
+            if len(recent_sizes) >= 3 and all(s >= MIN_SIZE for s in recent_sizes):
+                anomaly = "⚡ КИТОВСКАЯ АКТИВНОСТЬ!"
+
+            # Формирование сообщения
             text = f"""
-🔥 КИТ-СДЕЛКА
+🔥 СДЕЛКА
 
 👛 Трейдер: {trader}
 📊 Событие: {market}
 💰 Сумма: ${size}
 📈 Цена: {price}
+{anomaly}
 🔗 https://polymarket.com/market/{market.replace(' ', '-')}
 """
 
