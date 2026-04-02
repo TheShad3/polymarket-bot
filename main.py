@@ -7,8 +7,8 @@ import os
 # -------------------------------
 # Настройки Telegram из переменных окружения
 # -------------------------------
-TOKEN = os.getenv("TG_BOT_TOKEN")  # Пример: 8416331409:AAHmKxMdTqJatN2-UpOBjTNHibpW4O-lUNc
-CHAT_ID = int(os.getenv("TG_CHAT_ID"))  # Пример: 239655276
+TOKEN = os.getenv("TG_BOT_TOKEN")
+CHAT_ID = int(os.getenv("TG_CHAT_ID"))
 bot = Bot(token=TOKEN)
 
 # -------------------------------
