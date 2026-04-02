@@ -2,7 +2,8 @@ import requests
 import time
 import os
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import random
 
 # Telegram
 TOKEN = os.getenv("TOKEN")
@@ -15,10 +16,6 @@ MIN_SIZE = 500
 TOP_INTERVAL_MIN = 10
 # Период активности (часов)
 HOURS_ACTIVITY = 1
-
-# Порог % изменения цены
-PRICE_CHANGE_THRESHOLD = 5
-PRICE_CHANGE_INTERVAL = 10
 
 # Последние N сделок для расчета вероятности и тренда
 N_PROB = 10
@@ -44,38 +41,23 @@ KEYWORDS = [
     "sanctions", "energy-policy"
 ]
 
-# URL Polymarket
-URL = "https://clob.polymarket.com/trades?limit=50"
-
 # История
 seen_trades = set()
 market_last_signal = {}
 wallet_activity = defaultdict(list)
 market_prices = defaultdict(list)
 
+# Тестовые рынки для генерации
+TEST_MARKETS = ["Russia-Ukraine conflict", "US elections 2024", "China-Taiwan tension"]
 
 def send_message(text):
     try:
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": CHAT_ID, "text": text})
+        res = requests.post(url, json={"chat_id": CHAT_ID, "text": text}, timeout=10)
+        if res.status_code != 200:
+            print("Ошибка Telegram:", res.text)
     except Exception as e:
         print("Ошибка отправки:", e)
-
-
-def fetch_trades():
-    try:
-        res = requests.get(URL, timeout=10)
-        data = res.json()
-        if isinstance(data, dict):
-            return data.get("data", [])
-        elif isinstance(data, list):
-            return data
-        else:
-            return []
-    except Exception as e:
-        print("Ошибка загрузки:", e)
-        return []
-
 
 def contains_keyword(text):
     if not text:
@@ -86,27 +68,9 @@ def contains_keyword(text):
             return True
     return False
 
-
-def send_top_wallets():
-    now = datetime.utcnow()
-    cutoff = now - timedelta(hours=HOURS_ACTIVITY)
-    sums = {}
-    for wallet, trades in wallet_activity.items():
-        total = sum(s for s, t in trades if t >= cutoff)
-        if total > 0:
-            sums[wallet] = total
-    if not sums:
-        return
-    top_wallets = sorted(sums.items(), key=lambda x: x[1], reverse=True)[:5]
-    text = "📊 Топ активных кошельков за последний час:\n"
-    for wallet, total in top_wallets:
-        text += f"👛 {wallet} — ${total}\n"
-    send_message(text)
-
-
 def check_price_anomaly(market, price):
-    now = datetime.utcnow()
-    cutoff = now - timedelta(minutes=PRICE_CHANGE_INTERVAL)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=10)
     market_prices[market].append((price, now))
     market_prices[market] = [(p, t) for p, t in market_prices[market] if t >= cutoff]
     if not market_prices[market]:
@@ -115,10 +79,9 @@ def check_price_anomaly(market, price):
     if old_price == 0:
         return None
     change_pct = (price - old_price) / old_price * 100
-    if abs(change_pct) >= PRICE_CHANGE_THRESHOLD:
+    if abs(change_pct) >= 5:
         return round(change_pct, 2)
     return None
-
 
 def calc_market_prob(market):
     last_prices = [p for p, t in market_prices[market][-N_PROB:]]
@@ -127,9 +90,7 @@ def calc_market_prob(market):
     avg = sum(last_prices) / len(last_prices)
     return round(avg * 100, 2)
 
-
 def generate_trend(market):
-    """Графический тренд последних N_PROB цен"""
     last_prices = [p for p, t in market_prices[market][-N_PROB:]]
     if len(last_prices) < 2:
         return ""
@@ -144,26 +105,46 @@ def generate_trend(market):
             trend += "→"
     return trend
 
+def send_top_wallets():
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=HOURS_ACTIVITY)
+    sums = {}
+    for wallet, trades in wallet_activity.items():
+        total = sum(s for s, t in trades if t >= cutoff)
+        if total > 0:
+            sums[wallet] = total
+    if not sums:
+        return
+    top_wallets = sorted(sums.items(), key=lambda x: x[1], reverse=True)[:5]
+    text = "📊 Топ активных кошельков за последний час:\n"
+    for wallet, total in top_wallets:
+        text += f"👛 {wallet} — ${total}\n"
+    send_message(text)
+
+def generate_fake_trade():
+    trade_id = str(random.randint(1000000, 9999999))
+    trader = random.choice(WATCH_WALLETS)
+    market = random.choice(TEST_MARKETS)
+    size = random.randint(500, 5000)
+    price = round(random.uniform(0.1, 1.0), 2)
+    return {"id": trade_id, "trader": trader, "market": market, "size": size, "price": price}
 
 def main():
-    print("Бот запущен...")
-    last_top = datetime.utcnow() - timedelta(minutes=TOP_INTERVAL_MIN)
-
+    print("Тестовый бот запущен...")
+    last_top = datetime.now(timezone.utc) - timedelta(minutes=TOP_INTERVAL_MIN)
     while True:
-        trades = fetch_trades()
-        print(f"Получено сделок: {len(trades)}")
-        now = datetime.utcnow()
+        trades = [generate_fake_trade()]
+        now = datetime.now(timezone.utc)
+        print(f"Сгенерировано сделок: {len(trades)}")
 
         for t in trades:
-            if not isinstance(t, dict):
-                continue
             trade_id = t.get("id")
             trader = t.get("trader")
-            market = t.get("market", "unknown")
-            size = t.get("size", 0)
-            price = t.get("price", 0)
+            market = t.get("market")
+            size = t.get("size")
+            price = t.get("price")
 
-            if not trade_id or trade_id in seen_trades:
+            if trade_id in seen_trades:
                 continue
             if trader not in WATCH_WALLETS:
                 continue
@@ -185,10 +166,7 @@ def main():
                 anomaly = "⚡ КИТОВСКАЯ АКТИВНОСТЬ!"
 
             price_change = check_price_anomaly(market, price)
-            price_alert = ""
-            if price_change:
-                price_alert = f"⚠️ Цена изменилась на {price_change}% за последние {PRICE_CHANGE_INTERVAL} мин!"
-
+            price_alert = f"⚠️ Цена изменилась на {price_change}%!" if price_change else ""
             prob = calc_market_prob(market)
             prob_text = f"🔮 Системная вероятность исхода: {prob}%" if prob else ""
             trend_text = generate_trend(market)
@@ -196,7 +174,7 @@ def main():
                 trend_text = f"📈 Тренд: {trend_text}"
 
             text = f"""
-🔥 СДЕЛКА
+🔥 ТЕСТОВАЯ СДЕЛКА
 
 👛 Трейдер: {trader}
 📊 Событие: {market}
@@ -218,7 +196,6 @@ def main():
             last_top = now
 
         time.sleep(10)
-
 
 if __name__ == "__main__":
     main()
