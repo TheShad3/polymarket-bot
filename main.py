@@ -1,25 +1,30 @@
 import requests
 import time
-import os
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from telegram import Bot
 
-# Telegram
-TOKEN = os.getenv("TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+# -------------------------------
+# Настройки Telegram
+# -------------------------------
+TOKEN = "8416331409:AAHmKxMdTqJatN2-UpOBjTNHibpW4O-lUNc"
+CHAT_ID = 239655276
+bot = Bot(token=TOKEN)
 
-# Порог суммы сделки
-MIN_SIZE = 200  # уменьшен, чтобы ловить больше сделок
+# -------------------------------
+# Ключевые слова
+# -------------------------------
+KEYWORDS = [
+    "Trump", "Biden", "Russia", "Ukraine", "China", "war", "election",
+    "international", "us-foreign-policy", "ukraine-war", "middle-east",
+    "red-sea", "houthi", "taiwan", "eu-politics", "uk-politics",
+    "us-congress", "white-house", "administration", "federal-reserve",
+    "interest-rates", "supreme-court", "trade-wars", "crypto-policy",
+    "sanctions", "energy-policy"
+]
 
-# Интервал для топа активности (минут)
-TOP_INTERVAL_MIN = 10
-# Период активности кошелька (часов)
-HOURS_ACTIVITY = 1
-
-# Последние N сделок для расчета вероятности и тренда
-N_PROB = 10
-
+# -------------------------------
 # Кошельки для отслеживания
+# -------------------------------
 WATCH_WALLETS = [
     "0x7f3c8979d0afa00007bae4747d5347122af05613",
     "0xd5ccdf772f795547e299de57f47966e24de8dea4",
@@ -30,195 +35,154 @@ WATCH_WALLETS = [
     "0xbad457dc633bbb7b6cbe09dd5867a5e8e597acd7"
 ]
 
-# Расширенный список ключевых слов
-KEYWORDS = [
-    "Trump", "Biden", "Russia", "Ukraine", "China", "war", "election",
-    "international", "us-foreign-policy", "ukraine-war", "middle-east",
-    "red-sea", "houthi", "taiwan", "eu-politics", "uk-politics",
-    "us-congress", "white-house", "administration", "federal-reserve",
-    "interest-rates", "supreme-court", "trade-wars", "crypto-policy",
-    "sanctions", "energy-policy",
-    # дополнительные общие слова
-    "conflict", "crisis", "negotiation", "tension", "sanction", "military"
-]
+LEADERBOARD_URL = "https://data-api.polymarket.com/v1/leaderboard"
+CLOB_URL = "https://clob.polymarket.com/trades?limit=100"
 
-# URL Polymarket (CLOB API)
-URL = "https://clob.polymarket.com/trades?limit=50"
+# -------------------------------
+# Пороговые параметры
+# -------------------------------
+MIN_AMOUNT = 100
+MIN_WIN_RATE = 0.6
+MIN_ACTIVE_WALLETS = 2
+ANOMALY_THRESHOLD = 0.2
+TOP_INTERVAL_MIN = 5  # интервал сбора топ сигналов
 
-# История
-seen_trades = set()
-market_last_signal = {}
-wallet_activity = defaultdict(list)
-market_prices = defaultdict(list)
+wallet_stats = {}
+top_signals = []
 
-
-def send_message(text):
+# -------------------------------
+# Функции
+# -------------------------------
+def update_watch_wallets(limit=30):
     try:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        res = requests.post(url, json={"chat_id": CHAT_ID, "text": text}, timeout=10)
-        if res.status_code != 200:
-            print("Ошибка Telegram:", res.text)
+        res = requests.get(f"{LEADERBOARD_URL}?limit={limit}")
+        data = res.json()
+        wallets = [e.get("proxyWallet") for e in data if e.get("proxyWallet")]
+        print(f"[{datetime.now(timezone.utc)}] Обновлено кошельков: {len(wallets)}")
+        return wallets
     except Exception as e:
-        print("Ошибка отправки:", e)
+        print("Ошибка обновления кошельков:", e)
+        return []
 
+def get_recent_trades(limit=100):
+    try:
+        res = requests.get(CLOB_URL)
+        trades = res.json()
+        return trades
+    except Exception as e:
+        print("Ошибка загрузки сделок:", e)
+        return []
 
-def contains_keyword(text):
-    if not text:
-        return False
-    text = text.lower()
-    for kw in KEYWORDS:
-        if kw.lower() in text:
-            return True
-    return False
+def update_wallet_stats(trades):
+    global wallet_stats
+    for t in trades:
+        if isinstance(t, dict):
+            wallet = t.get("maker")
+            outcome = t.get("outcome")
+            amount = float(t.get("size",0))
+            if wallet not in wallet_stats:
+                wallet_stats[wallet] = {"wins":0, "total":0}
+            if amount >= MIN_AMOUNT:
+                wallet_stats[wallet]["total"] +=1
+                if outcome:
+                    wallet_stats[wallet]["wins"] +=1
 
+def check_trades():
+    global top_signals
+    trades = get_recent_trades()
+    update_wallet_stats(trades)
+    market_map = {}
+    
+    for t in trades:
+        if isinstance(t, dict):
+            market_id = t.get("market", {}).get("id")
+            if not market_id:
+                continue
+            wallet = t.get("maker")
+            amount = float(t.get("size",0))
+            title = t.get("market", {}).get("title","")
+            probability = float(t.get("market", {}).get("probability",0))
+            outcome_side = t.get("outcomeSide")
+            
+            win_rate = wallet_stats.get(wallet, {}).get("wins",0) / max(wallet_stats.get(wallet, {}).get("total",1),1)
+            
+            if (wallet in WATCH_WALLETS and
+                any(k.lower() in title.lower() for k in KEYWORDS) and
+                amount >= MIN_AMOUNT and
+                win_rate >= MIN_WIN_RATE):
+                if market_id not in market_map:
+                    market_map[market_id] = []
+                market_map[market_id].append({
+                    "wallet": wallet,
+                    "amount": amount,
+                    "title": title,
+                    "url": f"https://polymarket.com/market/{market_id}",
+                    "win_rate": win_rate,
+                    "probability": probability,
+                    "outcome_side": outcome_side
+                })
+    
+    # Сильные сигналы и аномалии
+    signals_sent = 0
+    for m, entries in market_map.items():
+        if len(entries) >= MIN_ACTIVE_WALLETS:
+            top_signals.extend(entries)
+            message = f"🟢 *Сильный сигнал:* {entries[0]['title']}\n\n"
+            for e in entries:
+                message += f"Кошелек: {e['wallet']}\nСумма: ${e['amount']}\nWinRate: {e['win_rate']*100:.1f}%\nСсылка: [Открыть]({e['url']})\n\n"
+            bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+            signals_sent += 1
+        
+        for e in entries:
+            if e["outcome_side"]=="YES" and e["probability"] < 0.5 - ANOMALY_THRESHOLD:
+                bot.send_message(chat_id=CHAT_ID,
+                    text=f"⚠️ *Аномалия:* {e['title']}\nКошелек {e['wallet']} ставит YES против вероятности {e['probability']*100:.1f}%\nСумма: ${e['amount']}\n[Открыть]({e['url']})",
+                    parse_mode="Markdown")
+            elif e["outcome_side"]=="NO" and e["probability"] > 0.5 + ANOMALY_THRESHOLD:
+                bot.send_message(chat_id=CHAT_ID,
+                    text=f"⚠️ *Аномалия:* {e['title']}\nКошелек {e['wallet']} ставит NO против вероятности {e['probability']*100:.1f}%\nСумма: ${e['amount']}\n[Открыть]({e['url']})",
+                    parse_mode="Markdown")
+    print(f"[{datetime.now(timezone.utc)}] Проверено {len(trades)} сделок, отправлено сигналов: {signals_sent}")
 
-def fetch_trades(retries=3, delay=5):
-    for attempt in range(retries):
-        try:
-            res = requests.get(URL, timeout=10)
-            data = res.json()
-            if isinstance(data, dict):
-                return data.get("data", [])
-            elif isinstance(data, list):
-                return data
-            else:
-                return []
-        except Exception as e:
-            print(f"Ошибка загрузки (попытка {attempt+1}):", e)
-            time.sleep(delay)
-    return []
-
-
-def check_price_anomaly(market, price):
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(minutes=10)
-    market_prices[market].append((price, now))
-    market_prices[market] = [(p, t) for p, t in market_prices[market] if t >= cutoff]
-    if not market_prices[market]:
-        return None
-    old_price = market_prices[market][0][0]
-    if old_price == 0:
-        return None
-    change_pct = (price - old_price) / old_price * 100
-    if abs(change_pct) >= 2:  # сниженный порог аномалии
-        return round(change_pct, 2)
-    return None
-
-
-def calc_market_prob(market):
-    last_prices = [p for p, t in market_prices[market][-N_PROB:]]
-    if not last_prices:
-        return None
-    avg = sum(last_prices) / len(last_prices)
-    return round(avg * 100, 2)
-
-
-def generate_trend(market):
-    last_prices = [p for p, t in market_prices[market][-N_PROB:]]
-    if len(last_prices) < 2:
-        return ""
-    trend = ""
-    for i in range(1, len(last_prices)):
-        diff = last_prices[i] - last_prices[i - 1]
-        if diff > 0.01:
-            trend += "↑"
-        elif diff < -0.01:
-            trend += "↓"
-        else:
-            trend += "→"
-    return trend
-
-
-def send_top_wallets():
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=HOURS_ACTIVITY)
-    sums = {}
-    for wallet, trades in wallet_activity.items():
-        total = sum(s for s, t in trades if t >= cutoff)
-        if total > 0:
-            sums[wallet] = total
-    if not sums:
+def send_top_signals():
+    global top_signals
+    if not top_signals:
         return
-    top_wallets = sorted(sums.items(), key=lambda x: x[1], reverse=True)[:5]
-    text = "📊 Топ активных кошельков за последний час:\n"
-    for wallet, total in top_wallets:
-        text += f"👛 {wallet} — ${total}\n"
-    send_message(text)
-
+    sorted_signals = sorted(top_signals, key=lambda x: x["amount"]*x["win_rate"], reverse=True)
+    message = "🏆 *ТОП сигналы за последние минуты:*\n\n"
+    for e in sorted_signals[:10]:
+        emoji = "🟢" if e["win_rate"] >= 0.6 else "⚠️"
+        message += (
+            f"{emoji} *{e['title']}*\n"
+            f"💰 Сумма: ${e['amount']}\n"
+            f"📈 WinRate: {e['win_rate']*100:.1f}%\n"
+            f"🔗 [Ссылка]({e['url']})\n"
+            f"⏱ {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}\n\n"
+        )
+    bot.send_message(chat_id=CHAT_ID, text=message, parse_mode="Markdown")
+    top_signals = []
 
 def main():
-    print("Бот запущен с частыми сигналами...")
-    last_top = datetime.now(timezone.utc) - timedelta(minutes=TOP_INTERVAL_MIN)
-
+    last_wallet_update = datetime.now(timezone.utc) - timedelta(minutes=61)
+    last_top_send = datetime.now(timezone.utc) - timedelta(minutes=TOP_INTERVAL_MIN)
+    
     while True:
-        trades = fetch_trades()
         now = datetime.now(timezone.utc)
-        print(f"Получено сделок: {len(trades)}")
-
-        for t in trades:
-            if not isinstance(t, dict):
-                continue
-
-            trade_id = t.get("id")
-            trader = t.get("trader")
-            market = t.get("market", "unknown")
-            size = t.get("size", 0)
-            price = t.get("price", 0)
-
-            if not trade_id or trade_id in seen_trades:
-                continue
-            if trader not in WATCH_WALLETS:
-                continue
-            if size < MIN_SIZE:
-                continue
-            if not contains_keyword(market):
-                continue
-
-            # разрешаем сигнал каждые 5 минут для одного рынка
-            last_signal = market_last_signal.get(market)
-            if last_signal and now - last_signal < timedelta(minutes=5):
-                continue
-            market_last_signal[market] = now
-            seen_trades.add(trade_id)
-
-            wallet_activity[trader].append((size, now))
-            last_three = [s for s, t in wallet_activity[trader][-3:]]
-            anomaly = ""
-            if len(last_three) >= 3 and all(s >= MIN_SIZE for s in last_three):
-                anomaly = "⚡ КИТОВСКАЯ АКТИВНОСТЬ!"
-
-            price_change = check_price_anomaly(market, price)
-            price_alert = f"⚠️ Цена изменилась на {price_change}%!" if price_change else ""
-            prob = calc_market_prob(market)
-            prob_text = f"🔮 Системная вероятность исхода: {prob}%" if prob else ""
-            trend_text = generate_trend(market)
-            if trend_text:
-                trend_text = f"📈 Тренд: {trend_text}"
-
-            text = f"""
-🔥 СДЕЛКА
-
-👛 Трейдер: {trader}
-📊 Событие: {market}
-💰 Сумма: ${size}
-📈 Цена: {price}
-{anomaly}
-{price_alert}
-{prob_text}
-{trend_text}
-
-💡 Активность кошелька за последние 3 сделки: {sum(last_three)}
-
-🔗 https://polymarket.com/market/{market.replace(' ', '-')}
-"""
-            send_message(text)
-
-        if now - last_top >= timedelta(minutes=TOP_INTERVAL_MIN):
-            send_top_wallets()
-            last_top = now
-
+        if (now - last_wallet_update) >= timedelta(minutes=60):
+            new_wallets = update_watch_wallets(30)
+            if new_wallets:
+                WATCH_WALLETS.clear()
+                WATCH_WALLETS.extend(new_wallets)
+            last_wallet_update = now
+        
+        check_trades()
+        
+        if (now - last_top_send) >= timedelta(minutes=TOP_INTERVAL_MIN):
+            send_top_signals()
+            last_top_send = now
+        
         time.sleep(10)
 
-
 if __name__ == "__main__":
+    print("Бот запущен...")
     main()
