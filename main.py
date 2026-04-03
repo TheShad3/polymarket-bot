@@ -1,15 +1,25 @@
 import os
 import time
 import requests
-from telegram import Bot
+import telegram
 
+# ----------------------------
+# ENV
+# ----------------------------
 TOKEN = os.getenv("TG_BOT_TOKEN")
 CHAT_ID = int(os.getenv("TG_CHAT_ID"))
 
-bot = Bot(token=TOKEN)
+bot = telegram.Bot(token=TOKEN)
 
+# ----------------------------
+# SETTINGS
+# ----------------------------
+MIN_VOLUME = 50000  # фильтр объема
 seen = set()
 
+# ----------------------------
+# FETCH MARKETS
+# ----------------------------
 def fetch_markets():
     url = "https://gamma-api.polymarket.com/markets?limit=50"
 
@@ -21,6 +31,9 @@ def fetch_markets():
         print("Ошибка:", e)
         return []
 
+# ----------------------------
+# MAIN
+# ----------------------------
 def main():
     print("Бот запущен...")
 
@@ -40,17 +53,19 @@ def main():
 
             title = m.get("question", "Unknown")
             volume = float(m.get("volume", 0))
-            liquidity = float(m.get("liquidity", 0))
+            end_date = m.get("endDate")
+
+            # ❗ фильтр старых рынков
+            if not end_date or "2020" in end_date:
+                continue
 
             print(title, volume)
 
-            # 🔥 сигнал активности
-            if volume > 10000:  # можно менять
+            if volume >= MIN_VOLUME:
                 msg = (
                     f"🔥 Активный рынок\n\n"
                     f"📊 {title}\n"
-                    f"💰 Объем: {volume}$\n"
-                    f"💧 Ликвидность: {liquidity}$"
+                    f"💰 Объем: {volume:,.0f}$"
                 )
 
                 try:
