@@ -3,97 +3,64 @@ import time
 import requests
 from telegram import Bot
 
-# ----------------------------
-# ENV
-# ----------------------------
 TOKEN = os.getenv("TG_BOT_TOKEN")
 CHAT_ID = int(os.getenv("TG_CHAT_ID"))
 
 bot = Bot(token=TOKEN)
 
-# ----------------------------
-# SETTINGS
-# ----------------------------
 MIN_AMOUNT = 20
 seen = set()
 
-# ----------------------------
-# FETCH EVENTS
-# ----------------------------
-def fetch_events():
-    url = "https://gamma-api.polymarket.com/events?limit=20"
+def fetch_trades():
+    url = "https://api.dune.com/api/v1/query/3368552/results"
 
     try:
         r = requests.get(url, timeout=10)
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        return data.get("result", {}).get("rows", [])
     except Exception as e:
-        print("Ошибка events:", e)
+        print("Ошибка:", e)
         return []
 
-# ----------------------------
-# FETCH TRADES ПО EVENT
-# ----------------------------
-def fetch_trades(event_id):
-    url = f"https://gamma-api.polymarket.com/events/{event_id}/activity"
-
-    try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        print("Ошибка trades:", e)
-        return []
-
-# ----------------------------
-# MAIN
-# ----------------------------
 def main():
     print("Бот запущен...")
 
     while True:
-        events = fetch_events()
-        print(f"Получено событий: {len(events)}")
+        trades = fetch_trades()
+        print(f"Получено: {len(trades)}")
 
         sent = 0
 
-        for e in events:
-            event_id = e.get("id")
-            title = e.get("title", "Unknown")
+        for t in trades:
+            trade_id = t.get("tx_hash")
+            if trade_id in seen:
+                continue
 
-            trades = fetch_trades(event_id)
+            seen.add(trade_id)
 
-            for t in trades:
-                if t.get("type") != "trade":
-                    continue
+            wallet = t.get("trader")
+            amount = float(t.get("amount_usd", 0))
+            market = t.get("market")
 
-                trade_id = t.get("id")
-                if trade_id in seen:
-                    continue
+            print(wallet, amount, market)
 
-                seen.add(trade_id)
+            if amount >= MIN_AMOUNT:
+                msg = (
+                    f"🔥 Крупная сделка\n\n"
+                    f"👛 {wallet}\n"
+                    f"💰 {amount}$\n"
+                    f"📊 {market}"
+                )
 
-                wallet = t.get("user")
-                amount = float(t.get("size", 0))
-
-                print(f"{wallet} | {amount} | {title}")
-
-                if amount >= MIN_AMOUNT:
-                    msg = (
-                        f"🔥 Сделка\n\n"
-                        f"👛 {wallet}\n"
-                        f"💰 {amount}$\n"
-                        f"📊 {title}"
-                    )
-
-                    try:
-                        bot.send_message(chat_id=CHAT_ID, text=msg)
-                        sent += 1
-                    except Exception as e:
-                        print("Ошибка отправки:", e)
+                try:
+                    bot.send_message(chat_id=CHAT_ID, text=msg)
+                    sent += 1
+                except Exception as e:
+                    print("Ошибка отправки:", e)
 
         print(f"Отправлено: {sent}")
-        time.sleep(15)
+        time.sleep(20)
 
 if __name__ == "__main__":
     main()
