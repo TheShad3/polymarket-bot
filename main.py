@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+from datetime import datetime
 
 TOKEN = os.getenv("TG_BOT_TOKEN")
 CHAT_ID = os.getenv("TG_CHAT_ID")
@@ -31,27 +32,45 @@ def fetch_markets():
         print("Ошибка API:", e)
         return []
 
+def is_fresh_market(m):
+    start = m.get("startDate")
+    if not start:
+        return False
+    try:
+        year = int(start[:4])
+        return year >= 2024
+    except:
+        return False
+
 def main():
     print("БОТ ЗАПУЩЕН 🚀")
 
     while True:
         markets = fetch_markets()
-        print(f"Маркетов: {len(markets)}")
+        print(f"Маркетов всего: {len(markets)}")
 
         sent = 0
+        fresh_count = 0
 
         for m in markets:
             market_id = m.get("id")
             title = m.get("question", "No title")
 
+            # ✅ ГЛАВНЫЙ ФИЛЬТР — СВЕЖИЕ РЫНКИ
+            if not is_fresh_market(m):
+                continue
+
             try:
                 volume = float(m.get("volume") or 0)
+                liquidity = float(m.get("liquidity") or 0)
             except:
-                volume = 0
-
-            # ❗ мягкий фильтр
-            if volume < 1000:
                 continue
+
+            # отсеиваем мусор
+            if volume < 2000 or liquidity < 500:
+                continue
+
+            fresh_count += 1
 
             # -------------------
             # HISTORY
@@ -70,9 +89,7 @@ def main():
 
             print(f"{title} | {int(volume)} | Δ {int(delta)}")
 
-            # -------------------
             # 🚀 СИГНАЛ РОСТА
-            # -------------------
             if volume >= MIN_VOLUME and delta >= DELTA_THRESHOLD:
                 msg = (
                     f"🚀 РОСТ ОБЪЁМА\n\n"
@@ -85,9 +102,7 @@ def main():
                 sent += 1
                 continue
 
-            # -------------------
-            # 📊 АКТИВНЫЕ РЫНКИ
-            # -------------------
+            # 📊 ТОП АКТИВНЫЕ (НО ТОЛЬКО СВЕЖИЕ)
             if volume >= 30000 and market_id not in sent_recent:
                 msg = (
                     f"📊 АКТИВНЫЙ РЫНОК\n\n"
@@ -102,6 +117,7 @@ def main():
         if len(sent_recent) > 200:
             sent_recent.clear()
 
+        print(f"Свежих рынков: {fresh_count}")
         print(f"Отправлено: {sent}")
         print("-" * 40)
 
