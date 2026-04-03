@@ -5,11 +5,11 @@ import requests
 TOKEN = os.getenv("TG_BOT_TOKEN")
 CHAT_ID = os.getenv("TG_CHAT_ID")
 
-MIN_VOLUME = 50000
-DELTA_THRESHOLD = 10000  # прирост объема для сигнала
+MIN_VOLUME = 20000
+DELTA_THRESHOLD = 2000
 
-seen = set()
 last_volumes = {}
+first_run = True
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -32,6 +32,8 @@ def fetch_markets():
         return []
 
 def main():
+    global first_run
+
     print("Бот запущен...")
 
     while True:
@@ -49,6 +51,11 @@ def main():
             if not end_date or int(end_date[:4]) < 2024:
                 continue
 
+            # 🔥 первый запуск — просто сохраняем
+            if first_run:
+                last_volumes[market_id] = volume
+                continue
+
             old_volume = last_volumes.get(market_id, volume)
             delta = volume - old_volume
 
@@ -56,7 +63,6 @@ def main():
 
             print(title, volume, f"Δ {delta}")
 
-            # 🔥 СИГНАЛ ТОЛЬКО ПРИ РОСТЕ
             if volume >= MIN_VOLUME and delta >= DELTA_THRESHOLD:
                 msg = (
                     f"🚀 РОСТ ОБЪЁМА\n\n"
@@ -67,6 +73,8 @@ def main():
 
                 send_telegram(msg)
                 sent += 1
+
+        first_run = False
 
         print(f"Отправлено: {sent}")
         time.sleep(30)
