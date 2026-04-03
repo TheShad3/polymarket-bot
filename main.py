@@ -6,10 +6,9 @@ TOKEN = os.getenv("TG_BOT_TOKEN")
 CHAT_ID = os.getenv("TG_CHAT_ID")
 
 MIN_VOLUME = 20000
-DELTA_THRESHOLD = 2000
+DELTA_THRESHOLD = 3000  # накопленный рост
 
-last_volumes = {}
-first_run = True
+history = {}
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -32,8 +31,6 @@ def fetch_markets():
         return []
 
 def main():
-    global first_run
-
     print("Бот запущен...")
 
     while True:
@@ -51,30 +48,32 @@ def main():
             if not end_date or int(end_date[:4]) < 2024:
                 continue
 
-            # 🔥 первый запуск — просто сохраняем
-            if first_run:
-                last_volumes[market_id] = volume
+            if market_id not in history:
+                history[market_id] = []
+            
+            history[market_id].append(volume)
+
+            # храним только последние 5 значений (~2-3 минуты)
+            if len(history[market_id]) > 5:
+                history[market_id].pop(0)
+
+            if len(history[market_id]) < 5:
                 continue
 
-            old_volume = last_volumes.get(market_id, volume)
-            delta = volume - old_volume
+            delta = history[market_id][-1] - history[market_id][0]
 
-            last_volumes[market_id] = volume
-
-            print(title, volume, f"Δ {delta}")
+            print(title, volume, f"Δ5m {delta}")
 
             if volume >= MIN_VOLUME and delta >= DELTA_THRESHOLD:
                 msg = (
-                    f"🚀 РОСТ ОБЪЁМА\n\n"
+                    f"🚀 НАКОПЛЕНИЕ ОБЪЁМА\n\n"
                     f"📊 {title}\n"
                     f"💰 Объем: {int(volume):,}$\n"
-                    f"⚡ Прирост: +{int(delta):,}$"
+                    f"⚡ Рост за время: +{int(delta):,}$"
                 )
 
                 send_telegram(msg)
                 sent += 1
-
-        first_run = False
 
         print(f"Отправлено: {sent}")
         time.sleep(30)
