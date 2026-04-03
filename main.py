@@ -44,6 +44,23 @@ def main():
             market_id = m.get("id")
             title = m.get("question", "No title")
 
+            # -------------------
+            # ❗ ФИЛЬТР АКТУАЛЬНОСТИ
+            # -------------------
+            if not m.get("active"):
+                continue
+
+            if m.get("closed") or m.get("archived"):
+                continue
+
+            try:
+                liquidity = float(m.get("liquidity") or 0)
+            except:
+                liquidity = 0
+
+            if liquidity < 1000:
+                continue
+
             try:
                 volume = float(m.get("volume") or 0)
             except:
@@ -67,7 +84,7 @@ def main():
             print(f"{title} | {int(volume)} | Δ {int(delta)}")
 
             # -------------------
-            # 🚀 СИГНАЛ РОСТА (главный)
+            # 🚀 СИГНАЛ РОСТА
             # -------------------
             if volume >= MIN_VOLUME and delta >= DELTA_THRESHOLD:
                 msg = (
@@ -82,7 +99,7 @@ def main():
                 continue
 
             # -------------------
-            # 📊 ТОП РЫНКИ (редко)
+            # 📊 АКТИВНЫЕ РЫНКИ
             # -------------------
             if volume >= 50000 and market_id not in sent_recent:
                 msg = (
@@ -95,7 +112,6 @@ def main():
                 sent_recent.add(market_id)
                 sent += 1
 
-        # очищаем, чтобы не залипало
         if len(sent_recent) > 200:
             sent_recent.clear()
 
