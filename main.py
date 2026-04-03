@@ -44,27 +44,14 @@ def main():
             market_id = m.get("id")
             title = m.get("question", "No title")
 
-            # -------------------
-            # ❗ ФИЛЬТР АКТУАЛЬНОСТИ
-            # -------------------
-            if not m.get("active"):
-                continue
-
-            if m.get("closed") or m.get("archived"):
-                continue
-
-            try:
-                liquidity = float(m.get("liquidity") or 0)
-            except:
-                liquidity = 0
-
-            if liquidity < 1000:
-                continue
-
             try:
                 volume = float(m.get("volume") or 0)
             except:
                 volume = 0
+
+            # ❗ мягкий фильтр
+            if volume < 1000:
+                continue
 
             # -------------------
             # HISTORY
@@ -101,7 +88,7 @@ def main():
             # -------------------
             # 📊 АКТИВНЫЕ РЫНКИ
             # -------------------
-            if volume >= 50000 and market_id not in sent_recent:
+            if volume >= 30000 and market_id not in sent_recent:
                 msg = (
                     f"📊 АКТИВНЫЙ РЫНОК\n\n"
                     f"{title}\n"
