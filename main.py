@@ -2,44 +2,37 @@ import os
 import time
 import requests
 from telegram import Bot
-from datetime import datetime, timedelta, timezone
 
 # ----------------------------
-# Переменные окружения
+# ENV
 # ----------------------------
 TOKEN = os.getenv("TG_BOT_TOKEN")
-CHAT_ID = os.getenv("TG_CHAT_ID")
+CHAT_ID = int(os.getenv("TG_CHAT_ID"))
 
-if not TOKEN or not CHAT_ID:
-    raise ValueError("Укажи TG_BOT_TOKEN и TG_CHAT_ID в Railway")
-
-CHAT_ID = int(CHAT_ID)
 bot = Bot(token=TOKEN)
 
 # ----------------------------
-# Настройки
+# SETTINGS
 # ----------------------------
-MIN_AMOUNT = 20  # минимальная сумма для сигнала
-
-# защита от дублей
-seen_trades = set()
+MIN_AMOUNT = 20
+seen = set()
 
 # ----------------------------
-# Получение сделок (CLOB API)
+# FETCH (РАБОЧИЙ ENDPOINT)
 # ----------------------------
 def fetch_trades():
-    url = "https://clob.polymarket.com/trades"
+    url = "https://gamma-api.polymarket.com/events/trades?limit=50"
+
     try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        return data.get("trades", [])
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        return r.json()
     except Exception as e:
-        print(f"Ошибка загрузки: {e}")
+        print("Ошибка загрузки:", e)
         return []
 
 # ----------------------------
-# Основной цикл
+# MAIN LOOP
 # ----------------------------
 def main():
     print("Бот запущен...")
@@ -48,43 +41,37 @@ def main():
         trades = fetch_trades()
         print(f"Получено сделок: {len(trades)}")
 
-        signals_sent = 0
+        sent = 0
 
         for t in trades:
-            if not isinstance(t, dict):
-                continue
-
             trade_id = t.get("id")
-            if trade_id in seen_trades:
+            if trade_id in seen:
                 continue
 
-            seen_trades.add(trade_id)
+            seen.add(trade_id)
 
-            wallet = t.get("traderId")
-            amount = float(t.get("amount", 0))
-            title = t.get("marketTitle", "Unknown")
+            wallet = t.get("user")
+            amount = float(t.get("size", 0))
+            title = t.get("title", "Unknown")
 
-            # ЛОГ ВСЕХ СДЕЛОК
             print(f"{wallet} | {amount} | {title}")
 
-            # ПРОСТОЙ ФИЛЬТР
             if amount >= MIN_AMOUNT:
                 msg = (
                     f"🔥 Сделка\n\n"
-                    f"👛 Кошелек: {wallet}\n"
-                    f"💰 Сумма: {amount}\n"
-                    f"📊 Маркет: {title}\n"
+                    f"👛 {wallet}\n"
+                    f"💰 {amount}$\n"
+                    f"📊 {title}"
                 )
 
                 try:
                     bot.send_message(chat_id=CHAT_ID, text=msg)
-                    signals_sent += 1
+                    sent += 1
                 except Exception as e:
-                    print(f"Ошибка отправки: {e}")
+                    print("Ошибка отправки:", e)
 
-        print(f"Отправлено сигналов: {signals_sent}")
+        print(f"Отправлено: {sent}")
         time.sleep(10)
-
 
 if __name__ == "__main__":
     main()
