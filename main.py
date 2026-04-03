@@ -5,8 +5,9 @@ import requests
 TOKEN = os.getenv("TG_BOT_TOKEN")
 CHAT_ID = os.getenv("TG_CHAT_ID")
 
-MIN_VOLUME = 20000
-DELTA_THRESHOLD = 3000
+# 🔥 ЗАНИЖЕННЫЕ ПОРОГИ (чтобы сигналы были)
+MIN_VOLUME = 5000
+DELTA_THRESHOLD = 500
 
 history = {}
 sent_recent = set()
@@ -38,6 +39,17 @@ def main():
         markets = fetch_markets()
         print(f"Маркетов: {len(markets)}")
 
+        if not markets:
+            time.sleep(30)
+            continue
+
+        # 🔥 СМОТРИМ МАКС ОБЪЕМ (для отладки)
+        try:
+            max_vol = max([float(m.get("volume", 0)) for m in markets])
+            print("MAX VOLUME:", int(max_vol))
+        except:
+            pass
+
         sent = 0
 
         for m in markets:
@@ -46,7 +58,14 @@ def main():
             volume = float(m.get("volume", 0))
             end_date = m.get("endDate", "")
 
-            if not end_date or int(end_date[:4]) < 2024:
+            # фильтр по дате (чтобы не было старых рынков)
+            if not end_date:
+                continue
+
+            try:
+                if int(end_date[:4]) < 2024:
+                    continue
+            except:
                 continue
 
             # -------------------
@@ -65,10 +84,10 @@ def main():
             else:
                 delta = 0
 
-            print(title, volume, f"Δ {delta}")
+            print(f"{title} | {int(volume)} | Δ {int(delta)}")
 
             # -------------------
-            # 🔥 ОСНОВНОЙ СИГНАЛ
+            # 🚀 СИГНАЛ РОСТА
             # -------------------
             if volume >= MIN_VOLUME and delta >= DELTA_THRESHOLD:
                 msg = (
@@ -83,9 +102,9 @@ def main():
                 continue
 
             # -------------------
-            # 💡 FALLBACK СИГНАЛ
+            # 📊 FALLBACK (ТОП РЫНКИ)
             # -------------------
-            if volume >= 100000 and market_id not in sent_recent:
+            if volume >= 15000 and market_id not in sent_recent:
                 msg = (
                     f"📊 ТОП РЫНОК\n\n"
                     f"{title}\n"
@@ -96,7 +115,13 @@ def main():
                 sent_recent.add(market_id)
                 sent += 1
 
+        # 🔥 ЧИСТИМ, чтобы снова слал через время
+        if len(sent_recent) > 100:
+            sent_recent.clear()
+
         print(f"Отправлено: {sent}")
+        print("-" * 40)
+
         time.sleep(30)
 
 if __name__ == "__main__":
