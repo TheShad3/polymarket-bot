@@ -6,9 +6,10 @@ TOKEN = os.getenv("TG_BOT_TOKEN")
 CHAT_ID = os.getenv("TG_CHAT_ID")
 
 MIN_VOLUME = 20000
-DELTA_THRESHOLD = 3000  # накопленный рост
+DELTA_THRESHOLD = 3000
 
 history = {}
+sent_recent = set()
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -48,31 +49,51 @@ def main():
             if not end_date or int(end_date[:4]) < 2024:
                 continue
 
+            # -------------------
+            # HISTORY
+            # -------------------
             if market_id not in history:
                 history[market_id] = []
-            
+
             history[market_id].append(volume)
 
-            # храним только последние 5 значений (~2-3 минуты)
             if len(history[market_id]) > 5:
                 history[market_id].pop(0)
 
-            if len(history[market_id]) < 5:
-                continue
+            if len(history[market_id]) >= 5:
+                delta = history[market_id][-1] - history[market_id][0]
+            else:
+                delta = 0
 
-            delta = history[market_id][-1] - history[market_id][0]
+            print(title, volume, f"Δ {delta}")
 
-            print(title, volume, f"Δ5m {delta}")
-
+            # -------------------
+            # 🔥 ОСНОВНОЙ СИГНАЛ
+            # -------------------
             if volume >= MIN_VOLUME and delta >= DELTA_THRESHOLD:
                 msg = (
-                    f"🚀 НАКОПЛЕНИЕ ОБЪЁМА\n\n"
+                    f"🚀 РОСТ ОБЪЁМА\n\n"
                     f"📊 {title}\n"
-                    f"💰 Объем: {int(volume):,}$\n"
-                    f"⚡ Рост за время: +{int(delta):,}$"
+                    f"💰 {int(volume):,}$\n"
+                    f"⚡ +{int(delta):,}$"
                 )
 
                 send_telegram(msg)
+                sent += 1
+                continue
+
+            # -------------------
+            # 💡 FALLBACK СИГНАЛ
+            # -------------------
+            if volume >= 100000 and market_id not in sent_recent:
+                msg = (
+                    f"📊 ТОП РЫНОК\n\n"
+                    f"{title}\n"
+                    f"💰 Объем: {int(volume):,}$"
+                )
+
+                send_telegram(msg)
+                sent_recent.add(market_id)
                 sent += 1
 
         print(f"Отправлено: {sent}")
